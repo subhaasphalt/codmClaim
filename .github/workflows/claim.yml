@@ -1,0 +1,38 @@
+name: CODM Daily Gift
+
+on:
+  schedule:
+    # 00:45 UTC = 06:15 AM IST. GitHub cron often runs 5-30 min late,
+    # so this keeps the run inside the 6-7 AM IST window.
+    - cron: "45 0 * * *"
+  workflow_dispatch:   # lets you run it manually for testing
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Claim gift
+        run: node claim.js
+        env:
+          PLAYER_ID: ${{ secrets.CODM_PLAYER_ID }}
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshots
+          path: fail-*.png
+
+      - name: Telegram alert on failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="❌ CODM daily gift claim FAILED. Check: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
