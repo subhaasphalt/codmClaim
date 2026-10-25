@@ -4,6 +4,20 @@ const URL = 'https://store.callofdutymobile.com/en-in/codm';
 const PLAYER_ID = process.env.PLAYER_ID;
 const MAX_ATTEMPTS = 3;
 
+// Poll until one of the matching elements is visible, then return it
+async function waitVisible(page, locator, timeoutMs) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const n = await locator.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const el = locator.nth(i);
+      if (await el.isVisible().catch(() => false)) return el;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return null;
+}
+
 async function attempt(n) {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({
@@ -14,48 +28,64 @@ async function attempt(n) {
   const page = await ctx.newPage();
   try {
     await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
 
-    // Dismiss cookie/popup banners if present
-    for (const label of [/accept/i, /agree/i, /got it/i, /close/i]) {
-      const b = page.getByRole('button', { name: label }).first();
-      if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
-    }
-
-    // 1. Enter player ID
+    // 1. Enter player ID (typed slowly so the site's validation fires)
     const input = page.locator('input[placeholder*="ID" i], input[type="text"]').first();
     await input.waitFor({ timeout: 30000 });
-    await input.fill(PLAYER_ID);
+    await input.click();
+    await input.fill('');
+    await input.pressSequentially(PLAYER_ID, { delay: 120 });
+    await input.press('Tab');
 
-    const confirm = page.getByRole('button', { name: /confirm|login|log in|submit|ok/i }).first();
-    if (await confirm.isVisible().catch(() => false)) await confirm.click();
-    await page.waitForTimeout(3000);
+    // 2. Wait for the "Welcome <name>" confirmation
+    const welcome = await waitVisible(page, page.getByText(/welcome/i), 30000);
+    if (!welcome) throw new Error('Player ID was not verified (no Welcome message)');
+    console.log('Player ID verified.');
 
-    // 2. Choose a product -> Gifts
-    await page.getByText(/^\s*gifts?\s*$/i).first().click({ timeout: 30000 });
+    // 3. Wait for products to finish loading, then click the GIFTS tab
+    const gifts = await waitVisible(page, page.getByText(/^\s*gifts?\s*$/i), 60000);
+    if (!gifts) throw new Error('GIFTS tab never appeared (products did not load)');
+    await gifts.click();
+    console.log('Opened Gifts tab.');
     await page.waitForTimeout(2000);
 
-    // 3. Claim
-    const claim = page.getByRole('button', { name: /claim|get|redeem/i }).first();
-    const already = page.getByText(/already (claimed|received)|claimed/i).first();
+    // 4. Find CLAIM GIFT (or detect already-claimed)
+    const claimLoc = page.getByText(/^\s*claim gift\s*$/i);
+    const doneLoc = page.getByText(/already claimed|claimed|received/i);
+    const end = Date.now() + 30000;
+    let claim = null, done = null;
+    while (Date.now() < end && !claim && !done) {
+      claim = await waitVisible(page, claimLoc, 2000);
+      if (!claim) done = await waitVisible(page, doneLoc, 1000);
+    }
 
-    if (await claim.isVisible({ timeout: 15000 }).catch(() => false)) {
+    if (claim) {
       await claim.click();
+      console.log('Clicked CLAIM GIFT.');
       await page.waitForTimeout(4000);
-      const ok = await page.getByText(/success|claimed|received/i).first()
-        .isVisible({ timeout: 15000 }).catch(() => false);
-      if (!ok) throw new Error('Clicked claim but saw no success message');
+
+      // Some sites show a confirm popup - click it if present
+      const popupBtn = await waitVisible(
+        page, page.getByRole('button', { name: /^(confirm|ok|claim|continue)$/i }), 3000);
+      if (popupBtn) { await popupBtn.click().catch(() => {}); await page.waitForTimeout(3000); }
+
+      const stillClaimable = await waitVisible(page, claimLoc, 2000);
+      const success = await waitVisible(page, page.getByText(/success|claimed|received|congrat/i), 8000);
+      if (stillClaimable && !success) throw new Error('CLAIM GIFT is still showing after click');
       console.log('Gift claimed.');
-    } else if (await already.isVisible().catch(() => false)) {
+    } else if (done) {
       console.log('Already claimed today - treating as success.');
     } else {
-      throw new Error('No claim button or claimed message found');
+      throw new Error('Neither CLAIM GIFT nor a claimed message was found');
     }
     await browser.close();
     return true;
   } catch (err) {
     console.error(`Attempt ${n} failed: ${err.message}`);
     await page.screenshot({ path: `fail-${n}.png`, fullPage: true }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText.slice(0, 1500)).catch(() => '');
+    console.error('--- page text ---\n' + text);
     await browser.close();
     return false;
   }
@@ -65,7 +95,7 @@ async function attempt(n) {
   if (!PLAYER_ID) { console.error('PLAYER_ID env var missing'); process.exit(1); }
   for (let i = 1; i <= MAX_ATTEMPTS; i++) {
     if (await attempt(i)) process.exit(0);
-    await new Promise(r => setTimeout(r, 30000));
+    await new Promise(r => setTimeout(r, 20000));
   }
   process.exit(1);
 })();
