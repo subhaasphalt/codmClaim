@@ -5,9 +5,9 @@ on:
     # Three attempts inside the 6-7 AM IST window (times are UTC):
     # 00:37 UTC = 06:07 AM IST, 00:53 UTC = 06:23 AM IST, 01:11 UTC = 06:41 AM IST.
     # Extra runs are harmless: the script reports "already claimed" if an earlier run got it.
-    - cron: "37 0 * * *"
-    - cron: "53 0 * * *"
-    - cron: "11 1 * * *"
+    - cron: "17 6 * * *"
+    - cron: "12 6 * * *"
+    - cron: "7 6 * * *"
   workflow_dispatch:   # lets you run it manually for testing
 
 jobs:
